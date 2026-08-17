@@ -23,6 +23,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Redis } from "@upstash/redis";
+import { waitUntil } from "@vercel/functions"; // 👈 Función oficial para tareas en segundo plano
 
 export const runtime = "edge";
 
@@ -50,6 +51,7 @@ async function logEventAndRedirect(
   menuUrl: string
 ) {
   const userAgent = req.headers.get("user-agent") || "";
+  
   const eventPromise = supabase.from("scan_events").insert({
     restaurant_id: params.restaurantId,
     table_id: params.tableId,
@@ -59,10 +61,14 @@ async function logEventAndRedirect(
     user_agent_raw: userAgent,
   });
 
-  // ✅ LÍNEA 63 CORREGIDA: Promise.resolve() convierte el thenable de Supabase
-  // en una Promesa nativa de JS que sí tiene el método .catch()
-  // @ts-ignore — waitUntil disponible en el contexto Edge de Vercel/Cloudflare
-  req.waitUntil?.(Promise.resolve(eventPromise).catch(() => {}));
+  // ✅ SOLUCIÓN AMBOS ERRORES:
+  // 1. waitUntil de @vercel/functions ejecuta la tarea en segundo plano en Route Handlers.
+  // 2. Promise.resolve() convierte el thenable de Supabase en Promesa nativa para usar .catch().
+  waitUntil(
+    Promise.resolve(eventPromise).catch((err) => {
+      console.error("Error registrando evento en segundo plano:", err);
+    })
+  );
 
   return NextResponse.redirect(menuUrl, 302);
 }
