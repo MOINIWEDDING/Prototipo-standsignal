@@ -23,7 +23,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Redis } from "@upstash/redis";
-import { waitUntil } from "@vercel/functions"; // 👈 Función oficial para tareas en segundo plano
 
 export const runtime = "edge";
 
@@ -51,24 +50,23 @@ async function logEventAndRedirect(
   menuUrl: string
 ) {
   const userAgent = req.headers.get("user-agent") || "";
-  
-  const eventPromise = supabase.from("scan_events").insert({
-    restaurant_id: params.restaurantId,
-    table_id: params.tableId,
-    stand_id: params.standId,
-    medium: params.medium,
-    device_os: detectOS(userAgent),
-    user_agent_raw: userAgent,
-  });
 
-  // ✅ SOLUCIÓN AMBOS ERRORES:
-  // 1. waitUntil de @vercel/functions ejecuta la tarea en segundo plano en Route Handlers.
-  // 2. Promise.resolve() convierte el thenable de Supabase en Promesa nativa para usar .catch().
-  waitUntil(
-    Promise.resolve(eventPromise).catch((err) => {
-      console.error("Error registrando evento en segundo plano:", err);
-    })
-  );
+  // Ejecución en segundo plano no bloqueante usando una función asíncrona autoejecutada (IIFE).
+  // Evita usar req.waitUntil (que falla en Route Handlers) y permite usar await con Supabase sin bloquear el 302.
+  (async () => {
+    try {
+      await supabase.from("scan_events").insert({
+        restaurant_id: params.restaurantId,
+        table_id: params.tableId,
+        stand_id: params.standId,
+        medium: params.medium,
+        device_os: detectOS(userAgent),
+        user_agent_raw: userAgent,
+      });
+    } catch (error) {
+      console.error("Error al registrar evento en segundo plano:", error);
+    }
+  })();
 
   return NextResponse.redirect(menuUrl, 302);
 }
