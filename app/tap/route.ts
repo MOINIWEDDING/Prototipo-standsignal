@@ -59,8 +59,8 @@ async function logEventAndRedirect(
     user_agent_raw: userAgent,
   });
 
-  // SOLUCIÓN: Usamos Promise.resolve() para convertir el 'thenable' 
-  // de Supabase en una Promesa nativa y poder utilizar .catch().
+  // ✅ LÍNEA 63 CORREGIDA: Promise.resolve() convierte el thenable de Supabase
+  // en una Promesa nativa de JS que sí tiene el método .catch()
   // @ts-ignore — waitUntil disponible en el contexto Edge de Vercel/Cloudflare
   req.waitUntil?.(Promise.resolve(eventPromise).catch(() => {}));
 
