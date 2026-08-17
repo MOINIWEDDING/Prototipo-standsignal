@@ -4,27 +4,12 @@
 // Recibe la petición, identifica la mesa, registra el evento SIN
 // bloquear, y responde con un 302 en milisegundos. No renderiza nada:
 // el cliente nunca ve "tu app", solo el salto.
-//
-// DOS formas de identificar el stand (ambas soportadas):
-//
-//  A) RECOMENDADA — enlace directo por mesa (lo que genera el panel en
-//     "Mesas y stands"). No requiere programar nada especial en el chip,
-//     solo escribir la URL tal cual:
-//       https://tudominio.com/tap?t=<table_id>&m=nfc
-//       https://tudominio.com/tap?t=<table_id>&m=qr
-//
-//  B) AVANZADA — UID mirroring de hardware, para quien programa muchos
-//     chips con NXP TagWriter y quiere que el chip autocomplete su UID:
-//       https://tudominio.com/tap?uid={UID}&ctr={COUNTER}   (NFC)
-//       https://tudominio.com/tap?code=x7F2Q                (QR)
-//     Este camino pasa primero por /onboarding para emparejar el stand
-//     con una mesa la primera vez que se toca.
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Redis } from "@upstash/redis";
 
-export const runtime = "edge";
+// 🔴 Se eliminó 'export const runtime = "edge"' para usar Node.js runtime nativo.
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -51,8 +36,7 @@ async function logEventAndRedirect(
 ) {
   const userAgent = req.headers.get("user-agent") || "";
 
-  // Ejecución en segundo plano no bloqueante usando una función asíncrona autoejecutada (IIFE).
-  // Evita usar req.waitUntil (que falla en Route Handlers) y permite usar await con Supabase sin bloquear el 302.
+  // Registro en segundo plano no bloqueante (Node.js no destruye la ejecución al responder)
   (async () => {
     try {
       await supabase.from("scan_events").insert({
@@ -64,7 +48,7 @@ async function logEventAndRedirect(
         user_agent_raw: userAgent,
       });
     } catch (error) {
-      console.error("Error al registrar evento en segundo plano:", error);
+      console.error("Error registrando evento en Supabase:", error);
     }
   })();
 
@@ -74,7 +58,7 @@ async function logEventAndRedirect(
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
-  // ---------- CAMINO A: enlace directo por mesa (recomendado) ----------
+  // ---------- CAMINO A: enlace directo por mesa ----------
   const tableId = searchParams.get("t");
   const mediumParam = searchParams.get("m");
   const medium: "nfc" | "qr" = mediumParam === "nfc" ? "nfc" : "qr";
@@ -86,7 +70,7 @@ export async function GET(req: NextRequest) {
     if (redis) {
       try {
         const raw = await redis.get<string>(cacheKey);
-        if (raw) cached = JSON.parse(raw);
+        if (raw) cached = typeof raw === "string" ? JSON.parse(raw) : raw;
       } catch {
         /* cache best-effort */
       }
@@ -117,7 +101,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // ---------- CAMINO B: UID mirroring / code (avanzado) ----------
+  // ---------- CAMINO B: UID mirroring / code ----------
   const uid = searchParams.get("uid");
   const code = searchParams.get("code");
   const physicalCode = (uid || code || "").trim();
@@ -140,7 +124,7 @@ export async function GET(req: NextRequest) {
   if (redis) {
     try {
       const raw = await redis.get<string>(standCacheKey);
-      if (raw) stand = JSON.parse(raw);
+      if (raw) stand = typeof raw === "string" ? JSON.parse(raw) : raw;
     } catch {
       /* cache best-effort */
     }
