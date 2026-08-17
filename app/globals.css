@@ -1,0 +1,11 @@
+/* app/globals.css */
+* { margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: #F1F4FB;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; }
+a { color: inherit; }
+::selection { background: rgba(50,97,153,0.2); }
