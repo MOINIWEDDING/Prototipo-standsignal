@@ -1,14 +1,15 @@
 // app/login/page.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Eye, EyeOff, LogIn, AlertCircle, Loader2 } from "lucide-react";
 import AuthLayout, { AUTH_TOKENS as T } from "@/components/AuthLayout";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
-export default function LoginPage() {
+// 1. Extraemos la lógica del login a un componente hijo
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "/dashboard";
@@ -145,6 +146,22 @@ export default function LoginPage() {
   );
 }
 
+// 2. El componente principal que Vercel intentará compilar envuelve todo en <Suspense>
+export default function LoginPage() {
+  return (
+    <Suspense 
+      fallback={
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '50px', color: '#666' }}>
+          Cargando...
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+// 3. El componente Field se queda igual
 function Field({
   label,
   trailing,
