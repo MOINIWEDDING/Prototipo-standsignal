@@ -10,18 +10,33 @@ export type ScanEventRow = {
   tables: { label: string } | null;
 };
 
+export type RestaurantRow = {
+  id: string;
+  name: string;
+  menu_url: string;
+  is_active: boolean;
+  created_at: string;
+  timezone: string;
+  logo_url: string | null;
+  redirect_bg_color: string;
+  redirect_bg_image_url: string | null;
+  redirect_bg_video_url: string | null;
+};
+
 // El primer restaurante del dueño autenticado. Cuando soportes multi-local
 // por cuenta, esto se vuelve un selector — por ahora un dueño = un restaurante.
-export async function getActiveRestaurant(supabase: SupabaseClient) {
+export async function getActiveRestaurant(supabase: SupabaseClient): Promise<RestaurantRow | null> {
   const { data, error } = await supabase
     .from("restaurants")
-    .select("id, name, menu_url, is_active, created_at")
+    .select(
+      "id, name, menu_url, is_active, created_at, timezone, logo_url, redirect_bg_color, redirect_bg_image_url, redirect_bg_video_url"
+    )
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
-  return data;
+  return data as RestaurantRow | null;
 }
 
 export async function getTables(supabase: SupabaseClient, restaurantId: string) {
@@ -64,17 +79,42 @@ export async function getRecentScanEvents(supabase: SupabaseClient, restaurantId
   return (data || []) as unknown as ScanEventRow[];
 }
 
-function isSameLocalDay(iso: string, ref: Date) {
+// ---------------------------------------------------------------------
+// Fechas/horas en la zona horaria REAL del restaurante, no en la del
+// servidor (Vercel corre en UTC). Sin esto, "hora pico" sale desfasada
+// según dónde esté físicamente el datacenter.
+// ---------------------------------------------------------------------
+function localParts(iso: string, timeZone: string) {
   const d = new Date(iso);
-  return d.getDate() === ref.getDate() && d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear();
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || "0";
+  return { hour: parseInt(get("hour"), 10) % 24, day: get("day"), month: get("month"), year: get("year") };
 }
 
-export function buildDashboardAggregates(events: ScanEventRow[], tables: { id: string; label: string }[]) {
-  const now = new Date();
-  const yesterday = new Date(Date.now() - 86400000);
+function isSameLocalDay(iso: string, refIso: string, timeZone: string) {
+  const a = localParts(iso, timeZone);
+  const b = localParts(refIso, timeZone);
+  return a.day === b.day && a.month === b.month && a.year === b.year;
+}
 
-  const todayCount = events.filter((e) => isSameLocalDay(e.scanned_at, now)).length;
-  const yestCount = events.filter((e) => isSameLocalDay(e.scanned_at, yesterday)).length;
+export function buildDashboardAggregates(
+  events: ScanEventRow[],
+  tables: { id: string; label: string }[],
+  timeZone: string = "America/Santo_Domingo"
+) {
+  const nowIso = new Date().toISOString();
+  const yesterdayIso = new Date(Date.now() - 86400000).toISOString();
+
+  const todayCount = events.filter((e) => isSameLocalDay(e.scanned_at, nowIso, timeZone)).length;
+  const yestCount = events.filter((e) => isSameLocalDay(e.scanned_at, yesterdayIso, timeZone)).length;
   const delta = todayCount - yestCount;
   const deltaPct = yestCount ? Math.round((delta / yestCount) * 100) : 0;
 
@@ -91,7 +131,8 @@ export function buildDashboardAggregates(events: ScanEventRow[], tables: { id: s
 
   const hourlyBuckets = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0, label: `${String(h).padStart(2, "0")}h` }));
   events.forEach((e) => {
-    hourlyBuckets[new Date(e.scanned_at).getHours()].count += 1;
+    const { hour } = localParts(e.scanned_at, timeZone);
+    hourlyBuckets[hour].count += 1;
   });
   const peakHour = hourlyBuckets.reduce((a, b) => (b.count > a.count ? b : a), hourlyBuckets[0]);
 

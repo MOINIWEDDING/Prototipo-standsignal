@@ -54,9 +54,8 @@ const NAV = [
   { href: "/dashboard/settings", label: "Menú y ajustes", icon: Utensils },
 ];
 
-export function Sidebar({ restaurantName }: { restaurantName: string }) {
+export function Sidebar({ restaurantName, logoUrl }: { restaurantName: string; logoUrl?: string | null }) {
   const pathname = usePathname();
-  const initials = restaurantName.slice(0, 2).toUpperCase();
 
   return (
     <div style={{
@@ -65,12 +64,21 @@ export function Sidebar({ restaurantName }: { restaurantName: string }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px", marginBottom: 30 }}>
         <div style={{
-          width: 36, height: 36, borderRadius: 11, background: `linear-gradient(135deg, ${T.blue}, ${T.teal})`,
-          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          width: 36, height: 36, borderRadius: 11, flexShrink: 0, overflow: "hidden",
+          background: logoUrl ? T.bg : `linear-gradient(135deg, ${T.blue}, ${T.teal})`,
+          display: "flex", alignItems: "center", justifyContent: "center",
         }}>
-          <Signal size={18} color="#fff" strokeWidth={2.5} />
+          {logoUrl ? (
+            // Tamaño correcto garantizado: el contenedor es fijo (36x36) y la
+            // imagen siempre se recorta a cubrirlo, sin importar su proporción original.
+            <img src={logoUrl} alt={restaurantName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          ) : (
+            <Signal size={18} color="#fff" strokeWidth={2.5} />
+          )}
         </div>
-        <div className="jk" style={{ fontSize: 16.5, fontWeight: 800, color: T.ink }}>StandSignal</div>
+        <div className="jk" style={{ fontSize: 15.5, fontWeight: 800, color: T.ink, lineHeight: 1.15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {restaurantName}
+        </div>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -96,16 +104,6 @@ export function Sidebar({ restaurantName }: { restaurantName: string }) {
       <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
         <div className="nav-item" style={{ opacity: 0.55, cursor: "default" }}><HelpCircle size={17} /> Ayuda</div>
         <div style={{ height: 1, background: T.border, margin: "10px 12px" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 12px", marginBottom: 4 }}>
-          <div className="jk" style={{
-            width: 32, height: 32, borderRadius: 10, background: T.coralSoft, display: "flex", alignItems: "center",
-            justifyContent: "center", fontSize: 13, fontWeight: 800, color: T.coral,
-          }}>{initials}</div>
-          <div>
-            <div className="jk" style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, lineHeight: 1.2 }}>{restaurantName}</div>
-            <div style={{ fontSize: 10.5, color: T.textFaint }}>Restaurante</div>
-          </div>
-        </div>
         <SignOutButton />
       </div>
     </div>

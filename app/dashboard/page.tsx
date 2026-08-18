@@ -15,7 +15,7 @@ export default async function DashboardPage() {
     getRecentScanEvents(supabase, restaurant!.id, 3),
   ]);
 
-  const aggregates = buildDashboardAggregates(events, tables);
+  const aggregates = buildDashboardAggregates(events, tables, restaurant!.timezone);
 
   return (
     <>

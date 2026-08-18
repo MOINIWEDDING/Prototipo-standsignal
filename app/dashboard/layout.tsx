@@ -18,7 +18,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: "#F1F4FB" }}>
       <DashboardGlobalStyles />
-      <Sidebar restaurantName={restaurant.name} />
+      <Sidebar restaurantName={restaurant.name} logoUrl={restaurant.logo_url} />
       <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
     </div>
   );
