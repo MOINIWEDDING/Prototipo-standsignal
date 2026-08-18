@@ -6,11 +6,6 @@
 // (pantalla en blanco/gris) se muestra una pequeña página de transición
 // con el fondo personalizado del restaurante (color, imagen o video) y
 // una animación de carga, y desde ahí se redirige por JS en ~450ms.
-// Los eventos se siguen registrando de forma asíncrona sin bloquear.
-//
-// Cuando el enlace NO resuelve (código inválido, restaurante inactivo,
-// menú sin configurar, stand nunca antes visto), se usa un 302 normal
-// hacia la pantalla de error u onboarding — ahí no hace falta branding.
 //
 // DOS formas de identificar el stand (ambas soportadas):
 //  A) RECOMENDADA — enlace directo por mesa: /tap?t=<table_id>&m=nfc|qr
@@ -20,7 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Redis } from "@upstash/redis";
 
-export const runtime = "edge";
+// NOTA: NO incluir 'export const runtime = "edge"' para evitar el error de middleware en Next.js
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -50,8 +45,28 @@ function detectOS(userAgent: string): "ios" | "android" | "other" {
   return "other";
 }
 
+// Resuelve URLs relativas o absolutas sin romper NextResponse.redirect
+function resolveTargetUrl(targetUrl: string | null | undefined, req: NextRequest): URL {
+  const defaultFallback = new URL("/", req.nextUrl.origin);
+  const rawUrl = targetUrl?.trim();
+
+  if (!rawUrl || rawUrl === "https://") {
+    return defaultFallback;
+  }
+
+  try {
+    if (rawUrl.startsWith("/")) {
+      return new URL(rawUrl, req.nextUrl.origin);
+    }
+    const formatted = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+    return new URL(formatted);
+  } catch (error) {
+    console.error("Error al resolver URL de redirección:", rawUrl, error);
+    return defaultFallback;
+  }
+}
+
 // Escapa lo mínimo necesario para insertar un string dentro de <script>
-// como literal JSON — evita que una URL con caracteres raros rompa el HTML.
 function jsonForScript(value: string) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
 }
@@ -103,123 +118,128 @@ async function logEventAsync(
   params: { restaurantId: string; tableId: string | null; standId: string | null; medium: "nfc" | "qr" }
 ) {
   const userAgent = req.headers.get("user-agent") || "";
-  const eventPromise = supabase.from("scan_events").insert({
-    restaurant_id: params.restaurantId,
-    table_id: params.tableId,
-    stand_id: params.standId,
-    medium: params.medium,
-    device_os: detectOS(userAgent),
-    user_agent_raw: userAgent,
-  });
-
-  // El builder de Supabase es "thenable" pero no una Promise real —
-  // hay que envolverlo para poder usar .catch() sin que truene.
-  // @ts-ignore — waitUntil disponible en el contexto Edge de Vercel/Cloudflare
-  req.waitUntil?.(Promise.resolve(eventPromise).catch(() => {}));
+  try {
+    await supabase.from("scan_events").insert({
+      restaurant_id: params.restaurantId,
+      table_id: params.tableId,
+      stand_id: params.standId,
+      medium: params.medium,
+      device_os: detectOS(userAgent),
+      user_agent_raw: userAgent,
+    });
+  } catch (error) {
+    console.error("Error al registrar scan_event en Supabase:", error);
+  }
 }
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
+  try {
+    const { searchParams } = new URL(req.url);
 
-  // ---------- CAMINO A: enlace directo por mesa (recomendado) ----------
-  const tableId = searchParams.get("t");
-  const mediumParam = searchParams.get("m");
-  const medium: "nfc" | "qr" = mediumParam === "nfc" ? "nfc" : "qr";
+    // ---------- CAMINO A: enlace directo por mesa (recomendado) ----------
+    const tableId = searchParams.get("t");
+    const mediumParam = searchParams.get("m");
+    const medium: "nfc" | "qr" = mediumParam === "nfc" ? "nfc" : "qr";
 
-  if (tableId) {
-    const cacheKey = `table:${tableId}`;
-    let cached: { restaurant_id: string; settings: RestaurantSettings } | null = null;
+    if (tableId) {
+      const cacheKey = `table:${tableId}`;
+      let cached: { restaurant_id: string; settings: RestaurantSettings } | null = null;
 
+      if (redis) {
+        try {
+          const raw = await redis.get<string>(cacheKey);
+          if (raw) cached = typeof raw === "string" ? JSON.parse(raw) : raw;
+        } catch {
+          /* cache best-effort */
+        }
+      }
+
+      if (!cached) {
+        const { data } = await supabase
+          .from("tables")
+          .select(`restaurant_id, restaurants(${RESTAURANT_FIELDS})`)
+          .eq("id", tableId)
+          .maybeSingle();
+
+        const rest = data?.restaurants as unknown as RestaurantSettings | null;
+        if (data && rest) {
+          cached = { restaurant_id: data.restaurant_id, settings: rest };
+          if (redis) await redis.set(cacheKey, JSON.stringify(cached), { ex: 3600 }).catch(() => {});
+        }
+      }
+
+      const settings = cached?.settings;
+      if (!cached || !settings || !settings.is_active || !settings.menu_url || settings.menu_url === "https://") {
+        return NextResponse.redirect(resolveTargetUrl(FALLBACK_URL, req), 302);
+      }
+
+      await logEventAsync(req, { restaurantId: cached.restaurant_id, tableId, standId: null, medium });
+      return renderRedirectHtml(settings.menu_url, settings);
+    }
+
+    // ---------- CAMINO B: UID mirroring / code (avanzado) ----------
+    const uid = searchParams.get("uid");
+    const code = searchParams.get("code");
+    const physicalCode = (uid || code || "").trim();
+
+    if (!physicalCode) {
+      return NextResponse.redirect(resolveTargetUrl(FALLBACK_URL, req), 302);
+    }
+
+    const standMedium = uid ? "nfc" : "qr";
+    const standCacheKey = `stand:${physicalCode}`;
+
+    type StandRecord = {
+      id: string;
+      restaurant_id: string | null;
+      table_id: string | null;
+      restaurants: RestaurantSettings | null;
+    };
+
+    let stand: StandRecord | null = null;
     if (redis) {
       try {
-        const raw = await redis.get<string>(cacheKey);
-        if (raw) cached = JSON.parse(raw);
+        const raw = await redis.get<string>(standCacheKey);
+        if (raw) stand = typeof raw === "string" ? JSON.parse(raw) : raw;
       } catch {
         /* cache best-effort */
       }
     }
 
-    if (!cached) {
+    if (!stand) {
       const { data } = await supabase
-        .from("tables")
-        .select(`restaurant_id, restaurants(${RESTAURANT_FIELDS})`)
-        .eq("id", tableId)
+        .from("stands")
+        .select(`id, restaurant_id, table_id, restaurants(${RESTAURANT_FIELDS})`)
+        .eq("physical_code", physicalCode)
         .maybeSingle();
 
-      const rest = data?.restaurants as unknown as RestaurantSettings | null;
-      if (data && rest) {
-        cached = { restaurant_id: data.restaurant_id, settings: rest };
-        if (redis) await redis.set(cacheKey, JSON.stringify(cached), { ex: 3600 }).catch(() => {});
-      }
+      stand = (data as unknown as StandRecord) || null;
+      if (stand && redis) await redis.set(standCacheKey, JSON.stringify(stand), { ex: 3600 }).catch(() => {});
     }
 
-    const settings = cached?.settings;
-    if (!cached || !settings || !settings.is_active || !settings.menu_url || settings.menu_url === "https://") {
-      return NextResponse.redirect(FALLBACK_URL, 302);
+    if (!stand) {
+      await supabase.from("stands").upsert(
+        { physical_code: physicalCode, kind: standMedium },
+        { onConflict: "physical_code", ignoreDuplicates: true }
+      );
+      const onboardingUrl = `${ONBOARDING_URL}?code=${encodeURIComponent(physicalCode)}`;
+      return NextResponse.redirect(resolveTargetUrl(onboardingUrl, req), 302);
     }
 
-    await logEventAsync(req, { restaurantId: cached.restaurant_id, tableId, standId: null, medium });
+    const settings = stand.restaurants;
+    if (!stand.restaurant_id || !settings || !settings.is_active || !settings.menu_url || settings.menu_url === "https://") {
+      return NextResponse.redirect(resolveTargetUrl(FALLBACK_URL, req), 302);
+    }
+
+    await logEventAsync(req, {
+      restaurantId: stand.restaurant_id,
+      tableId: stand.table_id,
+      standId: stand.id,
+      medium: standMedium,
+    });
     return renderRedirectHtml(settings.menu_url, settings);
+  } catch (fatalError) {
+    console.error("Error crítico en /tap:", fatalError);
+    return NextResponse.redirect(resolveTargetUrl(FALLBACK_URL, req), 302);
   }
-
-  // ---------- CAMINO B: UID mirroring / code (avanzado) ----------
-  const uid = searchParams.get("uid");
-  const code = searchParams.get("code");
-  const physicalCode = (uid || code || "").trim();
-
-  if (!physicalCode) {
-    return NextResponse.redirect(FALLBACK_URL, 302);
-  }
-
-  const standMedium = uid ? "nfc" : "qr";
-  const standCacheKey = `stand:${physicalCode}`;
-
-  type StandRecord = {
-    id: string;
-    restaurant_id: string | null;
-    table_id: string | null;
-    restaurants: RestaurantSettings | null;
-  };
-
-  let stand: StandRecord | null = null;
-  if (redis) {
-    try {
-      const raw = await redis.get<string>(standCacheKey);
-      if (raw) stand = JSON.parse(raw);
-    } catch {
-      /* cache best-effort */
-    }
-  }
-
-  if (!stand) {
-    const { data } = await supabase
-      .from("stands")
-      .select(`id, restaurant_id, table_id, restaurants(${RESTAURANT_FIELDS})`)
-      .eq("physical_code", physicalCode)
-      .maybeSingle();
-
-    stand = (data as unknown as StandRecord) || null;
-    if (stand && redis) await redis.set(standCacheKey, JSON.stringify(stand), { ex: 3600 }).catch(() => {});
-  }
-
-  if (!stand) {
-    await supabase.from("stands").upsert(
-      { physical_code: physicalCode, kind: standMedium },
-      { onConflict: "physical_code", ignoreDuplicates: true }
-    );
-    return NextResponse.redirect(`${ONBOARDING_URL}?code=${encodeURIComponent(physicalCode)}`, 302);
-  }
-
-  const settings = stand.restaurants;
-  if (!stand.restaurant_id || !settings || !settings.is_active || !settings.menu_url || settings.menu_url === "https://") {
-    return NextResponse.redirect(FALLBACK_URL, 302);
-  }
-
-  await logEventAsync(req, {
-    restaurantId: stand.restaurant_id,
-    tableId: stand.table_id,
-    standId: stand.id,
-    medium: standMedium,
-  });
-  return renderRedirectHtml(settings.menu_url, settings);
 }
