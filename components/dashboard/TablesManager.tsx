@@ -3,7 +3,10 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Loader2, AlertCircle, Wifi, QrCode, Check, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Plus, Loader2, AlertCircle, Wifi, QrCode, Check, ChevronDown, ChevronUp,
+  Trash2, ShieldAlert,
+} from "lucide-react";
 import { T } from "@/lib/theme";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import TableLinksPanel from "@/components/dashboard/TableLinksPanel";
@@ -35,12 +38,17 @@ export default function TablesManager({
   const [adding, setAdding] = useState(false);
   const [tableError, setTableError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [pairCode, setPairCode] = useState("");
   const [pairTableId, setPairTableId] = useState(initialTables[0]?.id || "");
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
   const [pairSuccess, setPairSuccess] = useState(false);
+
+  // ---------- zona de peligro: vaciar historial ----------
+  const [clearing, setClearing] = useState(false);
+  const [clearMsg, setClearMsg] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
   async function addTable(e: React.FormEvent) {
     e.preventDefault();
@@ -63,6 +71,25 @@ export default function TablesManager({
     setTables((prev) => [...prev, data]);
     if (!pairTableId) setPairTableId(data.id);
     setNewLabel("");
+    router.refresh();
+  }
+
+  async function deleteTable(tableId: string, label: string) {
+    const ok = window.confirm(
+      `¿Eliminar "${label}"? Esto borra su enlace NFC/QR — cualquier chip o QR ya impreso con ese enlace dejará de funcionar. El historial de escaneos ya registrado NO se borra.`
+    );
+    if (!ok) return;
+
+    setDeletingId(tableId);
+    const { error } = await supabase.from("tables").delete().eq("id", tableId);
+    setDeletingId(null);
+
+    if (error) {
+      alert("No se pudo eliminar la mesa: " + error.message);
+      return;
+    }
+    setTables((prev) => prev.filter((t) => t.id !== tableId));
+    if (pairTableId === tableId) setPairTableId("");
     router.refresh();
   }
 
@@ -89,6 +116,31 @@ export default function TablesManager({
     setPairCode("");
     router.refresh();
     setTimeout(() => setPairSuccess(false), 2500);
+  }
+
+  async function clearHistory() {
+    const ok = window.confirm(
+      "¿Vaciar TODO el historial de escaneos? Esto borra permanentemente todos los eventos registrados (mesas activas, horarios pico, adopción NFC/QR, etc). No se puede deshacer."
+    );
+    if (!ok) return;
+
+    setClearing(true);
+    setClearMsg(null);
+
+    const res = await fetch("/api/scan-events/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ restaurantId }),
+    });
+    const json = await res.json();
+    setClearing(false);
+
+    if (!res.ok) {
+      setClearMsg({ type: "error", text: json.error || "No se pudo vaciar el historial." });
+      return;
+    }
+    setClearMsg({ type: "ok", text: "Historial vaciado correctamente." });
+    router.refresh();
   }
 
   return (
@@ -118,7 +170,23 @@ export default function TablesManager({
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {tables.length === 0 && <div style={{ fontSize: 12.5, color: T.textFaint, padding: "10px 0" }}>Aún no tienes mesas — agrega la primera arriba.</div>}
           {tables.map((t) => (
-            <TableLinksPanel key={t.id} tableId={t.id} tableLabel={t.label} />
+            <div key={t.id} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <TableLinksPanel tableId={t.id} tableLabel={t.label} />
+              </div>
+              <button
+                onClick={() => deleteTable(t.id, t.label)}
+                disabled={deletingId === t.id}
+                title={`Eliminar ${t.label}`}
+                className="btn"
+                style={{
+                  width: 38, height: 38, flexShrink: 0, background: T.coralSoft, color: T.coral,
+                  display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                }}
+              >
+                {deletingId === t.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+              </button>
+            </div>
           ))}
         </div>
       </div>
@@ -186,6 +254,40 @@ export default function TablesManager({
                 </div>
               ))}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* ------------------------- zona de peligro ------------------------- */}
+      <div className="card" style={{ padding: 24, border: `1px solid rgba(223,110,91,0.35)` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+          <ShieldAlert size={15} color={T.coral} />
+          <div className="jk" style={{ fontSize: 15, fontWeight: 800, color: T.ink }}>Zona de peligro</div>
+        </div>
+        <div style={{ fontSize: 12, color: T.textFaint, marginBottom: 16 }}>
+          Vacía por completo el historial de escaneos de este restaurante — mesas activas, horarios pico,
+          adopción NFC/QR, todo. Las mesas y sus enlaces NO se borran, solo los eventos ya registrados.
+        </div>
+
+        <button
+          onClick={clearHistory}
+          disabled={clearing}
+          className="btn"
+          style={{
+            padding: "10px 16px", background: T.coral, color: "#fff", fontSize: 13,
+            display: "flex", alignItems: "center", gap: 8,
+          }}
+        >
+          {clearing ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+          {clearing ? "Vaciando…" : "Vaciar historial de escaneos"}
+        </button>
+
+        {clearMsg && (
+          <div className="fade-up" style={{
+            marginTop: 10, fontSize: 12, fontWeight: 600,
+            color: clearMsg.type === "ok" ? T.teal : "#B5493A",
+          }}>
+            {clearMsg.text}
           </div>
         )}
       </div>
