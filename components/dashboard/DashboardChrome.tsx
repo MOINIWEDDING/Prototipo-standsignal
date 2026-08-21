@@ -5,8 +5,8 @@ import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Signal, LayoutDashboard, Table2, Utensils, Settings, HelpCircle,
-  Search, Bell, Calendar, ChevronDown, FlaskConical,
+  Signal, LayoutDashboard, Table2, Utensils, Settings,
+  Search, Bell, Calendar, ChevronDown, FlaskConical, Info,
 } from "lucide-react";
 import { T } from "@/lib/theme";
 import SignOutButton from "@/components/SignOutButton";
@@ -102,7 +102,9 @@ export function Sidebar({ restaurantName, logoUrl }: { restaurantName: string; l
       </div>
 
       <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-        <div className="nav-item" style={{ opacity: 0.55, cursor: "default" }}><HelpCircle size={17} /> Ayuda</div>
+        <Link href="/dashboard/about" className={`nav-item ${pathname.startsWith("/dashboard/about") ? "active" : ""}`}>
+          <Info size={17} /> Sobre nuestro servicio
+        </Link>
         <div style={{ height: 1, background: T.border, margin: "10px 12px" }} />
         <SignOutButton />
       </div>
