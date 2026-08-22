@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import LandingNav from "@/components/landing/LandingNav";
 import LandingGlobalStyles from "@/components/landing/LandingGlobalStyles";
+import CatalogTeaser from "@/components/landing/CatalogTeaser";
 import Reveal from "@/components/dashboard/Reveal";
 import HeroFlowIllustration from "@/components/dashboard/about/HeroFlowIllustration";
 import {
@@ -134,6 +135,11 @@ export default function LandingPage() {
             ))}
           </div>
         </div>
+
+        {/* ============================= CATÁLOGO ============================= */}
+        <Reveal>
+          <CatalogTeaser />
+        </Reveal>
 
         {/* ============================= PRECIOS ============================= */}
         <div id="planes">
